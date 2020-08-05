@@ -1,7 +1,8 @@
-use crate::pool::{PoolEvent, WorkerPoolStatus};
-use crate::CrossbeamReceiver;
 use crate::CrossbeamSender;
-use crate::{Job, JobStatus, PidController, WorkerPool, WorkerPoolCommand};
+use crate::{CrossbeamReceiver, TickWorkTracker};
+use crate::{Job, JobStatus, PidController, WorkerPool, WorkerPoolCommand, WorkerPoolStatus};
+
+use crate::tracker::Tick;
 use async_std::future::Future;
 use async_std::pin::Pin;
 use async_std::stream::Stream;
@@ -17,124 +18,77 @@ use std::{
 };
 use typed_builder;
 
-#[derive(TypedBuilder)]
 pub struct AutoPool<In, Out, F> {
     /// WorkerPool to drive and monitor
     pool: WorkerPool<In, Out, F>,
-    /// Float representation of how many workers to start at.
-    #[builder(default = 1.0)]
-    num_workers: f32,
+    /// How often to evaluate the PID controller and add/remove workers
+    tick_rate: Duration,
     /// Target executions per second across all workers
-    #[builder(default)]
-    rate_per_sec: f32,
+    goal_rate_per_sec: f32,
+    /// Current number
+    num_workers: f32,
     /// Three part controller that drives towards the target rate
-    #[builder(default)]
     pid: PidController,
-    /// todo: Make this output PoolEvent::TaskComplete(Out)
-    #[builder(default)]
-    output: EventChannel<PoolEvent>,
+    /// Work tracking
+    tracker: TickWorkTracker,
 }
 
-pub struct EventChannel<T> {
-    chan: (CrossbeamSender<T>, CrossbeamReceiver<T>),
-}
-
-impl<T> EventChannel<T> {
-    pub fn new() -> Self {
-        Self { chan: crossbeam_channel::unbounded() }
-    }
-
-    pub fn try_next(&mut self) -> Option<T> {
-        match self.chan.1.try_recv() {
-            Ok(o) => Some(o),
-            Err(e) => None,
-        }
-    }
-
-    pub fn next(&mut self) -> Result<T, RecvError> {
-        self.chan.1.recv()
-    }
-}
-
-impl<T> Default for EventChannel<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 impl<In, Out, F> AutoPool<In, Out, F>
 where
     In: Send + Sync + 'static,
     Out: Send + Sync + 'static,
     F: Future<Output = JobStatus> + Send + 'static,
 {
-    /// Collects results from the workers, updates controllers, sends completed results
-    /// This method is meant to resolve very quickly, but it's limited by the async state
-    /// machine in `WorkerPool`.
-    ///
-    /// todo: Enumerate scenarios that cause actual blocking
-    ///
-    pub fn work(&mut self) -> Option<Out> {
-        //
-        // try to flush outstanding events from the pool
-        //
-        loop {
-            match self.pool.mut_pool_events().try_recv() {
-                Ok(event) => {
-                    match event {
-                        PoolEvent::WorkReady(out) => return Some(out),
-                        PoolEvent::TickComplete(tick) => {
-                            debug!(
-                                "{}, {}, {}",
-                                self.pid.output(),
-                                tick.tracker.rate_per_sec(),
-                                self.num_workers,
-                            );
+    fn work(&mut self) -> WorkerPoolStatus<Out> {
+        if self.tracker.tick_done() {
+            debug!(
+                "{}, {}, {}",
+                self.pid.output(),
+                self.tracker.tick_rate_per_sec(),
+                self.num_workers
+            );
 
-                            self.pid.update(self.rate_per_sec, tick.tracker.rate_per_sec());
-                            self.num_workers += self.pid.output();
+            self.pid.update(self.goal_rate_per_sec, self.tracker.tick_rate_per_sec());
+            self.num_workers += self.pid.output();
 
-                            // Update workers if we've crossed over an integer threshold
-                            if self.num_workers.floor() as usize != self.pool.target_workers() {
-                                commands.send(WorkerPoolCommand::SetWorkerCount(
-                                    self.num_workers as usize,
-                                ));
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    break;
-                }
+            // Update workers if we've crossed over an integer threshold
+            if self.num_workers.floor() as usize != self.pool.target_workers() {
+                self.pool.command(WorkerPoolCommand::SetWorkerCount(self.num_workers as usize));
             }
         }
-        //
-        // This part is also synchronous, but it is invoking the asyncronous part of the application
-        // Its goal is to generate PoolEvents for the next invocation of this loop.
-        // This will minimally block.
-        //
+
         match self.pool.work() {
-            WorkerPoolStatus::Working => {}
-            WorkerPoolStatus::Done => {}
+            WorkerPoolStatus::Ready(out) => {
+                self.tracker.track_work();
+                return WorkerPoolStatus::Ready(out);
+            }
+            WorkerPoolStatus::Working => WorkerPoolStatus::Working,
+            WorkerPoolStatus::Done => WorkerPoolStatus::Done,
         }
-
-        None
     }
 }
 
-impl<In, Out, F> Stream for AutoPool<In, Out, F>
-where
-    In: Send + Sync + Unpin + 'static,
-    Out: Send + Sync + 'static,
-    F: Future<Output = ()> + Send + 'static,
-{
-    type Item = Out;
-
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut ap = self.get_mut();
-        let mut out = &ap.output;
-    }
-}
-
+// impl<In, Out, F> Stream for AutoPool<In, Out, F>
+// where
+//     In: Send + Sync + Unpin + 'static,
+//     Out: Send + Sync + Unpin + 'static,
+//     F: Future<Output = ()> + Send + 'static,
+// {
+//     type Item = Out;
+//
+//     ///
+//     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+//         let mut ap = self.get_mut();
+//         match ap.work() {
+//             Some(e) => match e {
+//                 PoolEvent::TickComplete(_) => {}
+//                 PoolEvent::WorkReady(_) => {}
+//             },
+//             None => {}
+//         }
+//     }
+// }
+//
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +119,6 @@ mod tests {
 
     #[async_test]
     async fn pool_test() {
-        // let ap = AutoPool::
+        // let ap = AutoPool::builder
     }
 }

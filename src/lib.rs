@@ -4,6 +4,7 @@ extern crate typed_builder;
 mod autopool;
 mod pid;
 mod pool;
+mod tracker;
 
 #[cfg(feature = "tuning")]
 pub mod tuning;
@@ -15,10 +16,13 @@ pub(crate) use crossbeam_channel::{
     self, Receiver as CrossbeamReceiver, Sender as CrossbeamSender,
 };
 
-pub enum WorkerPoolStatus {
+pub enum WorkerPoolStatus<Out> {
+    Ready(Out),
     Working,
     Done,
 }
+
+pub(crate) use tracker::TickWorkTracker;
 
 #[cfg(test)]
 mod tests {
