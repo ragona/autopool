@@ -113,6 +113,6 @@ mod tests {
 
     #[async_test]
     async fn pool_test() {
-        // let ap = AutoPool::builder
+        // let ap = AutoPool::builderdd
     }
 }

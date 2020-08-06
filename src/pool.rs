@@ -282,6 +282,22 @@ impl<In> Default for PoolConfig<In> {
     }
 }
 
+impl<In> PoolConfig<In> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn default_job(&mut self, job: In) -> &mut Self {
+        self.default_job = Some(job);
+        self
+    }
+
+    pub fn target_workers(&mut self, n: usize) -> &mut Self {
+        self.target_workers = n;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +334,9 @@ mod tests {
 
     #[async_test]
     async fn pool_new_with_config() {
-        let mut _pool = WorkerPool::new_with_config(double, PoolConfig::default());
+        let _pool = WorkerPool::new_with_config(
+            double,
+            *PoolConfig::new().target_workers(4).default_job((2, 10)),
+        );
     }
 }
