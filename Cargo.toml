@@ -3,7 +3,7 @@ name = "autopool"
 description = "Self balancing async worker pool"
 license = "MIT" 
 readme = "README.md"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Ryan Ragona <ryanragona@gmail.com>"]
 edition = "2018"
 
