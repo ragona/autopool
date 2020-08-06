@@ -30,14 +30,10 @@ const FIX_ME: usize = 128;
 pub struct WorkerPool<In, Out, F> {
     /// The async function that a worker performs
     task: fn(Job<In, Out>) -> F,
-    /// How many workers we want
-    target_workers: usize,
+    /// User-configurable settings
+    config: PoolConfig<In>,
     /// How many workers we actually have
     cur_workers: usize,
-    /// Worker cap
-    max_workers: usize,
-    /// Default job that will be assigned to idle workers when the queue is empty
-    default_job: Option<In>,
     /// Outstanding tasks
     queue: VecDeque<In>,
     /// Channel for completed work from workers
@@ -50,6 +46,16 @@ pub struct WorkerPool<In, Out, F> {
     command_events: (CrossbeamSender<WorkerPoolCommand>, CrossbeamReceiver<WorkerPoolCommand>),
     /// How many workers we have asked to stop that are still working
     outstanding_stops: usize,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct PoolConfig<In> {
+    /// How many workers we want
+    target_workers: usize,
+    /// Default job that will be assigned to idle workers when the queue is empty
+    default_job: Option<In>,
+    /// Worker cap
+    max_workers: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -84,18 +90,20 @@ where
     F: Future<Output = JobStatus> + Send + 'static,
 {
     pub fn new(task: fn(Job<In, Out>) -> F) -> Self {
+        Self::new_with_config(task, PoolConfig::default())
+    }
+
+    pub fn new_with_config(task: fn(Job<In, Out>) -> F, config: PoolConfig<In>) -> Self {
         Self {
-            task,
-            target_workers: 1,
-            cur_workers: 0,
-            max_workers: FIX_ME, // todo make all of this configurable with sensible defaults
-            workers_channel: channel(FIX_ME),
-            close_channel: channel(FIX_ME),
-            worker_events: crossbeam_channel::unbounded(),
+            workers_channel: channel(config.max_workers),
+            close_channel: channel(config.max_workers),
             command_events: crossbeam_channel::unbounded(),
-            queue: VecDeque::with_capacity(FIX_ME),
+            worker_events: crossbeam_channel::unbounded(),
+            queue: Default::default(),
             outstanding_stops: 0,
-            default_job: None,
+            cur_workers: 0,
+            config,
+            task,
         }
     }
 
@@ -108,7 +116,7 @@ where
 
     /// Target number of workers
     pub fn target_workers(&self) -> usize {
-        self.target_workers
+        self.config.target_workers
     }
 
     /// Whether the current number of workers is the target number of workers
@@ -125,7 +133,7 @@ where
     /// Sets the target number of workers.
     /// Does not stop in-progress workers.
     pub fn set_target_workers(&mut self, n: usize) {
-        self.target_workers = n;
+        self.config.target_workers = n;
     }
 
     /// Add a new task to the back of the queue
@@ -157,7 +165,7 @@ where
         while let Ok(command) = self.command_events.1.try_recv() {
             match command {
                 WorkerPoolCommand::Stop => {
-                    for _ in 0..self.target_workers {
+                    for _ in 0..self.config.target_workers {
                         self.send_stop_work_message();
                     }
                 }
@@ -167,7 +175,7 @@ where
                         n => n,
                     };
 
-                    self.target_workers = n;
+                    self.config.target_workers = n;
                 }
             }
         }
@@ -221,7 +229,7 @@ where
 
     fn get_task(&mut self) -> Option<In> {
         if self.queue.is_empty() {
-            return match &self.default_job {
+            return match &self.config.default_job {
                 None => None,
                 Some(default) => Some(default.clone()),
             };
@@ -268,6 +276,12 @@ impl<In, Out> Job<In, Out> {
     }
 }
 
+impl<In> Default for PoolConfig<In> {
+    fn default() -> Self {
+        Self { target_workers: 8, default_job: None, max_workers: 1024 }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,7 +312,12 @@ mod tests {
     }
 
     #[async_test]
-    async fn pool_test() {
-        // let pool = WorkerPool::new(double);
+    async fn pool_new() {
+        let mut _pool = WorkerPool::new(double);
+    }
+
+    #[async_test]
+    async fn pool_new_with_config() {
+        let mut _pool = WorkerPool::new_with_config(double, PoolConfig::default());
     }
 }
