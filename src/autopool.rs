@@ -1,22 +1,17 @@
-use crate::CrossbeamSender;
-use crate::{CrossbeamReceiver, TickWorkTracker};
-use crate::{Job, JobStatus, PidController, WorkerPool, WorkerPoolCommand, WorkerPoolStatus};
-
-use crate::tracker::Tick;
-use async_std::future::Future;
-use async_std::pin::Pin;
-use async_std::stream::Stream;
-use async_std::sync::channel;
-use async_std::task;
-use async_std::task::{Context, Poll};
-use crossbeam_channel::{RecvError, TryRecvError};
-use log::debug;
-use std::borrow::BorrowMut;
-use std::{
-    fmt::{Debug, Formatter},
-    time::{Duration, Instant},
+use crate::{
+    JobStatus, PidController, TickWorkTracker, WorkerPool, WorkerPoolCommand, WorkerPoolStatus,
 };
-use typed_builder;
+
+use async_std::future::Future;
+
+use log::debug;
+
+use async_std::{
+    pin::Pin,
+    stream::Stream,
+    task::{Context, Poll},
+};
+use std::time::Duration;
 
 pub struct AutoPool<In, Out, F> {
     /// WorkerPool to drive and monitor
@@ -35,27 +30,12 @@ pub struct AutoPool<In, Out, F> {
 
 impl<In, Out, F> AutoPool<In, Out, F>
 where
-    In: Send + Sync + 'static,
+    In: Send + Sync + Clone + 'static,
     Out: Send + Sync + 'static,
     F: Future<Output = JobStatus> + Send + 'static,
 {
     fn work(&mut self) -> WorkerPoolStatus<Out> {
-        if self.tracker.tick_done() {
-            debug!(
-                "{}, {}, {}",
-                self.pid.output(),
-                self.tracker.tick_rate_per_sec(),
-                self.num_workers
-            );
-
-            self.pid.update(self.goal_rate_per_sec, self.tracker.tick_rate_per_sec());
-            self.num_workers += self.pid.output();
-
-            // Update workers if we've crossed over an integer threshold
-            if self.num_workers.floor() as usize != self.pool.target_workers() {
-                self.pool.command(WorkerPoolCommand::SetWorkerCount(self.num_workers as usize));
-            }
-        }
+        self.tick();
 
         match self.pool.work() {
             WorkerPoolStatus::Ready(out) => {
@@ -66,32 +46,46 @@ where
             WorkerPoolStatus::Done => WorkerPoolStatus::Done,
         }
     }
+
+    fn tick(&mut self) {
+        if !self.tracker.tick_done() {
+            return;
+        }
+
+        debug!("{}, {}, {}", self.pid.output(), self.tracker.tick_rate_per_sec(), self.num_workers);
+
+        self.pid.update(self.goal_rate_per_sec, self.tracker.tick_rate_per_sec());
+        self.num_workers += self.pid.output();
+
+        // Update workers if we've crossed over an integer threshold
+        if self.num_workers.floor() as usize != self.pool.target_workers() {
+            self.pool.command(WorkerPoolCommand::SetWorkerCount(self.num_workers as usize));
+        }
+    }
 }
 
-// impl<In, Out, F> Stream for AutoPool<In, Out, F>
-// where
-//     In: Send + Sync + Unpin + 'static,
-//     Out: Send + Sync + Unpin + 'static,
-//     F: Future<Output = ()> + Send + 'static,
-// {
-//     type Item = Out;
-//
-//     ///
-//     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-//         let mut ap = self.get_mut();
-//         match ap.work() {
-//             Some(e) => match e {
-//                 PoolEvent::TickComplete(_) => {}
-//                 PoolEvent::WorkReady(_) => {}
-//             },
-//             None => {}
-//         }
-//     }
-// }
-//
+impl<In, Out, F> Stream for AutoPool<In, Out, F>
+where
+    In: Send + Sync + Unpin + Clone + 'static,
+    Out: Send + Sync + Unpin + 'static,
+    F: Future<Output = JobStatus> + Send + 'static,
+{
+    type Item = Out;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.get_mut().work() {
+            WorkerPoolStatus::Ready(o) => Poll::Ready(Some(o)),
+            WorkerPoolStatus::Working => Poll::Pending,
+            WorkerPoolStatus::Done => Poll::Ready(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Job;
+    use async_std::task;
     use futures_await_test::async_test;
     use std::time::Duration;
 

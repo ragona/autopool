@@ -1,5 +1,4 @@
-#[macro_use]
-extern crate typed_builder;
+#![allow(dead_code)]
 
 mod autopool;
 mod pid;

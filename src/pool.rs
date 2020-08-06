@@ -1,16 +1,11 @@
 #![allow(dead_code)]
 
-use crate::CrossbeamSender;
-use crate::{CrossbeamReceiver, WorkerPoolStatus};
-use async_std::sync::{TryRecvError, TrySendError};
+use crate::{CrossbeamReceiver, CrossbeamSender, WorkerPoolStatus};
 use async_std::{
     prelude::*,
-    sync::{channel, Receiver, Sender},
-    task,
+    sync::{channel, Receiver, Sender, TryRecvError, TrySendError},
 };
-use std::collections::VecDeque;
-use std::fmt::{Debug, Formatter};
-use std::time::{Duration, Instant};
+use std::{collections::VecDeque, fmt::Debug};
 
 const FIX_ME: usize = 128;
 
@@ -36,11 +31,13 @@ pub struct WorkerPool<In, Out, F> {
     /// The async function that a worker performs
     task: fn(Job<In, Out>) -> F,
     /// How many workers we want
-    num_workers: usize,
+    target_workers: usize,
     /// How many workers we actually have
     cur_workers: usize,
     /// Worker cap
     max_workers: usize,
+    /// Default job that will be assigned to idle workers when the queue is empty
+    default_job: Option<In>,
     /// Outstanding tasks
     queue: VecDeque<In>,
     /// Channel for completed work from workers
@@ -82,14 +79,14 @@ pub enum JobStatus {
 
 impl<In, Out, F> WorkerPool<In, Out, F>
 where
-    In: Send + Sync + 'static,
+    In: Send + Sync + Clone + 'static,
     Out: Send + Sync + 'static,
     F: Future<Output = JobStatus> + Send + 'static,
 {
     pub fn new(task: fn(Job<In, Out>) -> F) -> Self {
         Self {
             task,
-            num_workers: 1,
+            target_workers: 1,
             cur_workers: 0,
             max_workers: FIX_ME, // todo make all of this configurable with sensible defaults
             workers_channel: channel(FIX_ME),
@@ -98,6 +95,7 @@ where
             command_events: crossbeam_channel::unbounded(),
             queue: VecDeque::with_capacity(FIX_ME),
             outstanding_stops: 0,
+            default_job: None,
         }
     }
 
@@ -110,7 +108,7 @@ where
 
     /// Target number of workers
     pub fn target_workers(&self) -> usize {
-        self.num_workers
+        self.target_workers
     }
 
     /// Whether the current number of workers is the target number of workers
@@ -127,7 +125,7 @@ where
     /// Sets the target number of workers.
     /// Does not stop in-progress workers.
     pub fn set_target_workers(&mut self, n: usize) {
-        self.num_workers = n;
+        self.target_workers = n;
     }
 
     /// Add a new task to the back of the queue
@@ -159,7 +157,7 @@ where
         while let Ok(command) = self.command_events.1.try_recv() {
             match command {
                 WorkerPoolCommand::Stop => {
-                    for _ in 0..self.num_workers {
+                    for _ in 0..self.target_workers {
                         self.send_stop_work_message();
                     }
                 }
@@ -169,7 +167,7 @@ where
                         n => n,
                     };
 
-                    self.num_workers = n;
+                    self.target_workers = n;
                 }
             }
         }
@@ -189,18 +187,19 @@ where
         }
     }
 
-    /// Starts a new worker if there is work to do
-    /// todo: Default job?
+    /// Starts a new worker if there is work to do.
+    /// There is work to do either if there is an outstanding queue,
+    /// or if this pool has a default task that can be assigned.
     fn start_worker(&mut self) {
-        if self.queue.is_empty() {
+        let task = self.get_task();
+        if task.is_none() {
             return;
         }
 
-        let task = self.queue.pop_front().unwrap();
         let work_send = self.workers_channel.0.clone();
         let close_recv = self.close_channel.1.clone();
         let event_send = self.worker_events.0.clone();
-        let job = Job::new(task, close_recv, work_send);
+        let job = Job::new(task.unwrap(), close_recv, work_send);
         let fut = (self.task)(job);
 
         // If a worker stops on its own without us telling it to stop then we want to know about
@@ -218,6 +217,17 @@ where
         });
 
         self.cur_workers += 1;
+    }
+
+    fn get_task(&mut self) -> Option<In> {
+        if self.queue.is_empty() {
+            return match &self.default_job {
+                None => None,
+                Some(default) => Some(default.clone()),
+            };
+        } else {
+            Some(self.queue.pop_front().unwrap())
+        }
     }
 
     /// Adds a single worker if we are under our target count
@@ -289,6 +299,6 @@ mod tests {
 
     #[async_test]
     async fn pool_test() {
-        let mut pool = WorkerPool::new(double);
+        // let pool = WorkerPool::new(double);
     }
 }
