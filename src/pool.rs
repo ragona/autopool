@@ -31,7 +31,7 @@ pub struct WorkerPool<In, Out, F> {
     /// The async function that a worker performs
     task: fn(Job<In, Out>) -> F,
     /// User-configurable settings
-    config: PoolConfig<In>,
+    config: WorkerPoolConfig<In>,
     /// How many workers we actually have
     cur_workers: usize,
     /// Outstanding tasks
@@ -49,7 +49,7 @@ pub struct WorkerPool<In, Out, F> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct PoolConfig<In> {
+pub struct WorkerPoolConfig<In> {
     /// How many workers we want
     target_workers: usize,
     /// Default job that will be assigned to idle workers when the queue is empty
@@ -90,10 +90,10 @@ where
     F: Future<Output = JobStatus> + Send + 'static,
 {
     pub fn new(task: fn(Job<In, Out>) -> F) -> Self {
-        Self::new_with_config(task, PoolConfig::default())
+        Self::new_with_config(task, WorkerPoolConfig::default())
     }
 
-    pub fn new_with_config(task: fn(Job<In, Out>) -> F, config: PoolConfig<In>) -> Self {
+    pub fn new_with_config(task: fn(Job<In, Out>) -> F, config: WorkerPoolConfig<In>) -> Self {
         Self {
             workers_channel: channel(config.max_workers),
             close_channel: channel(config.max_workers),
@@ -276,13 +276,13 @@ impl<In, Out> Job<In, Out> {
     }
 }
 
-impl<In> Default for PoolConfig<In> {
+impl<In> Default for WorkerPoolConfig<In> {
     fn default() -> Self {
         Self { target_workers: 8, default_job: None, max_workers: 1024 }
     }
 }
 
-impl<In> PoolConfig<In> {
+impl<In> WorkerPoolConfig<In> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -336,7 +336,7 @@ mod tests {
     async fn pool_new_with_config() {
         let _pool = WorkerPool::new_with_config(
             double,
-            *PoolConfig::new().target_workers(4).default_job((2, 10)),
+            *WorkerPoolConfig::new().target_workers(4).default_job((2, 10)),
         );
     }
 }

@@ -68,6 +68,6 @@ impl PidController {
 
 impl Default for PidController {
     fn default() -> Self {
-        Self::new((0.0, 0.0, 0.0))
+        Self::new((0.001, 0.0, 0.0))
     }
 }

@@ -16,16 +16,21 @@ use std::time::Duration;
 pub struct AutoPool<In, Out, F> {
     /// WorkerPool to drive and monitor
     pool: WorkerPool<In, Out, F>,
-    /// How often to evaluate the PID controller and add/remove workers
-    tick_rate: Duration,
-    /// Target executions per second across all workers
-    goal_rate_per_sec: f32,
     /// Current number
     num_workers: f32,
     /// Three part controller that drives towards the target rate
     pid: PidController,
     /// Work tracking
     tracker: TickWorkTracker,
+    /// User controlled settings
+    config: AutoPoolConfig,
+}
+
+pub struct AutoPoolConfig {
+    /// How often to evaluate the PID controller and add/remove workers
+    tick_rate: Duration,
+    /// Target executions per second across all workers
+    goal_rate_per_sec: f32,
 }
 
 impl<In, Out, F> AutoPool<In, Out, F>
@@ -34,6 +39,16 @@ where
     Out: Send + Sync + 'static,
     F: Future<Output = JobStatus> + Send + 'static,
 {
+    pub fn new(config: AutoPoolConfig, pool: WorkerPool<In, Out, F>) -> Self {
+        Self {
+            tracker: TickWorkTracker::new(config.tick_rate),
+            pid: Default::default(), // todo PidConfig
+            num_workers: 0.0,
+            config,
+            pool,
+        }
+    }
+
     fn work(&mut self) -> WorkerPoolStatus<Out> {
         self.tick();
 
@@ -54,7 +69,7 @@ where
 
         debug!("{}, {}, {}", self.pid.output(), self.tracker.tick_rate_per_sec(), self.num_workers);
 
-        self.pid.update(self.goal_rate_per_sec, self.tracker.tick_rate_per_sec());
+        self.pid.update(self.config.goal_rate_per_sec, self.tracker.tick_rate_per_sec());
         self.num_workers += self.pid.output();
 
         // Update workers if we've crossed over an integer threshold
@@ -81,10 +96,16 @@ where
     }
 }
 
+impl AutoPoolConfig {
+    pub fn new(tick_rate: Duration, goal_rate_per_sec: f32) -> Self {
+        Self { tick_rate, goal_rate_per_sec }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Job;
+    use crate::{pool::WorkerPoolConfig, Job};
     use async_std::task;
     use futures_await_test::async_test;
     use std::time::Duration;
@@ -112,7 +133,11 @@ mod tests {
     }
 
     #[async_test]
-    async fn pool_test() {
-        // let ap = AutoPool::builderdd
+    async fn autopool_new() {
+        let wp_config = *WorkerPoolConfig::new().target_workers(4).default_job((2, 10));
+        let ap_config = AutoPoolConfig::new(Duration::from_secs_f32(0.1), 2500.0);
+        let worker_pool = WorkerPool::new_with_config(double, wp_config);
+
+        let _auto_pool = AutoPool::new(ap_config, worker_pool);
     }
 }
