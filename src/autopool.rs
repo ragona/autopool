@@ -88,6 +88,7 @@ where
     type Item = Out;
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        dbg!("YOOO");
         match self.get_mut().work() {
             WorkerPoolStatus::Ready(o) => Poll::Ready(Some(o)),
             WorkerPoolStatus::Working => Poll::Pending,

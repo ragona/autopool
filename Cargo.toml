@@ -24,4 +24,5 @@ version = "1.6.2"
 features = ["unstable"]
 
 [dev-dependencies]
+surf = "2.0.0-alpha.4"
 futures-await-test = "0.3.0"

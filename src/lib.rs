@@ -19,8 +19,9 @@ mod tracker;
 #[cfg(feature = "tuning")]
 pub mod tuning;
 
+pub use autopool::{AutoPool, AutoPoolConfig};
 pub use pid::PidController;
-pub use pool::{Job, JobStatus, WorkerPool, WorkerPoolCommand};
+pub use pool::{Job, JobStatus, WorkerPool, WorkerPoolCommand, WorkerPoolConfig};
 
 pub(crate) use crossbeam_channel::{
     self, Receiver as CrossbeamReceiver, Sender as CrossbeamSender,
